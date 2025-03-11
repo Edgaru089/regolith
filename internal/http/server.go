@@ -8,15 +8,17 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const (
-	httpClientTimeout = 10 * time.Second
+	outgoing_client_timeout = 10 * time.Second
 )
 
 var (
-	dialer = net.Dialer{Timeout: httpClientTimeout}
+	dialer      = net.Dialer{Timeout: outgoing_client_timeout}
+	http_client = http.Client{Timeout: outgoing_client_timeout}
 )
 
 type Server struct {
@@ -70,9 +72,15 @@ func (s *Server) dispatch(conn net.Conn) {
 			// so we simply exit the loop.
 			break
 		} else {
-			// We don't support plain old HTTP
-			simple_respond(conn, req, http.StatusBadGateway)
-			break
+			// handle_request on the other hand handles one request at a time,
+			// and returns when the request is done. It returns a bool indicating
+			// whether the connection should be kept alive, but itself never closes
+			// the connection.
+			kept_alive := s.handle_request(conn, req)
+			if !kept_alive {
+				_ = conn.Close()
+				return
+			}
 		}
 	}
 }
@@ -149,6 +157,75 @@ func (s *Server) handle_connect(conn net.Conn, req *http.Request) {
 		err_chan <- err
 	}()
 	close_err = <-err_chan
+}
+
+func (s *Server) handle_request(conn net.Conn, req *http.Request) (should_keepalive bool) {
+	// Some clients use Connection, some use Proxy-Connection
+	// https://www.oreilly.com/library/view/http-the-definitive/1565925092/re40.html
+	keep_alive := req.ProtoAtLeast(1, 1) &&
+		(strings.EqualFold(req.Header.Get("Proxy-Connection"), "keep-alive") ||
+			strings.EqualFold(req.Header.Get("Connection"), "keep-alive"))
+	req.RequestURI = "" // Outgoing request should not have RequestURI
+
+	remove_hop_headers(req.Header)
+	remove_extra_host_port(req)
+
+	if req.URL.Scheme == "" || req.URL.Host == "" {
+		_ = simple_respond(conn, req, http.StatusBadRequest)
+		return false
+	}
+
+	// Request & error log
+	var close_err error
+	defer func() {
+		if close_err != nil && !errors.Is(close_err, net.ErrClosed) {
+			// log non-closed errors
+			log.Printf("[%s] -> [%s] error: %v", conn.RemoteAddr(), req.URL, close_err)
+		}
+	}()
+
+	// Do the request and send the response back
+	resp, err := http_client.Do(req)
+	if err != nil {
+		close_err = err
+		_ = simple_respond(conn, req, http.StatusBadGateway)
+		return false
+	}
+
+	remove_hop_headers(resp.Header)
+	if keep_alive {
+		resp.Header.Set("Connection", "keep-alive")
+		resp.Header.Set("Proxy-Connection", "keep-alive")
+		resp.Header.Set("Keep-Alive", "timeout=60")
+	}
+
+	close_err = resp.Write(conn)
+	return close_err == nil && keep_alive
+}
+
+func remove_hop_headers(header http.Header) {
+	header.Del("Proxy-Connection") // Not in RFC but common
+	// https://www.ietf.org/rfc/rfc2616.txt
+	header.Del("Connection")
+	header.Del("Keep-Alive")
+	header.Del("Proxy-Authenticate")
+	header.Del("Proxy-Authorization")
+	header.Del("TE")
+	header.Del("Trailers")
+	header.Del("Transfer-Encoding")
+	header.Del("Upgrade")
+}
+
+func remove_extra_host_port(req *http.Request) {
+	host := req.Host
+	if host == "" {
+		host = req.URL.Host
+	}
+	if pHost, port, err := net.SplitHostPort(host); err == nil && port == "80" {
+		host = pHost
+	}
+	req.Host = host
+	req.URL.Host = host
 }
 
 func simple_respond(conn net.Conn, req *http.Request, statusCode int) error {
