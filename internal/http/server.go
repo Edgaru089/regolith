@@ -1,0 +1,169 @@
+package http
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"time"
+)
+
+const (
+	httpClientTimeout = 10 * time.Second
+)
+
+var (
+	dialer = net.Dialer{Timeout: httpClientTimeout}
+)
+
+type Server struct {
+}
+
+func (s *Server) Serve(listener net.Listener) (err error) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return err
+		}
+
+		go s.dispatch(conn)
+	}
+}
+
+func (s *Server) dispatch(conn net.Conn) {
+	buf := bufio.NewReader(conn)
+	for {
+		req, err := http.ReadRequest(buf)
+		if err != nil {
+			// Invalid request
+			_ = conn.Close()
+			break
+		}
+
+		if req.Method == http.MethodConnect {
+			if buf.Buffered() > 0 {
+				// There is still data in the buffered reader.
+				// We need to get it out and put it into a cachedConn,
+				// so that handleConnect can read it.
+				data := make([]byte, buf.Buffered())
+				_, err := io.ReadFull(buf, data)
+				if err != nil {
+					// Read from buffer failed, is this possible?
+					_ = conn.Close()
+					return
+				}
+				cachedConn := &cached_conn{
+					Conn:   conn,
+					Buffer: *bytes.NewBuffer(data),
+				}
+				s.handle_connect(cachedConn, req)
+			} else {
+				// No data in the buffered reader, we can just pass the original connection.
+				s.handle_connect(conn, req)
+			}
+			// handle_connect will take over the connection,
+			// i.e. it will not return until the connection is closed.
+			// When it returns, there will be no more requests from this connection,
+			// so we simply exit the loop.
+			break
+		} else {
+			// We don't support plain old HTTP
+			simple_respond(conn, req, http.StatusBadGateway)
+			break
+		}
+	}
+}
+
+// cached_conn is a net.Conn wrapper that first Read()s from a buffer,
+// and then from the underlying net.Conn when the buffer is drained.
+type cached_conn struct {
+	net.Conn
+	Buffer bytes.Buffer
+}
+
+func (c *cached_conn) Read(b []byte) (int, error) {
+	if c.Buffer.Len() > 0 {
+		n, err := c.Buffer.Read(b)
+		if err == io.EOF {
+			// Buffer is drained, hide it from the caller
+			err = nil
+		}
+		return n, err
+	}
+	return c.Conn.Read(b)
+}
+
+type timeout interface {
+	Timeout() bool
+}
+
+// handle_connect returns until the connection is closed by
+// the client, or errors. You don't need to close it again.
+func (s *Server) handle_connect(conn net.Conn, req *http.Request) {
+	conn.RemoteAddr()
+
+	defer conn.Close()
+
+	port := req.URL.Port()
+	if port == "" {
+		port = "80"
+	}
+	req_addr := net.JoinHostPort(req.URL.Hostname(), port)
+
+	// prep for error log on close
+	var close_err error
+	defer func() {
+		if close_err != nil && !errors.Is(close_err, net.ErrClosed) {
+			// log non-closed errors
+			log.Printf("[%s] -> [%s] error dialing remote: %v", conn.RemoteAddr(), req_addr, close_err)
+		}
+	}()
+
+	// dial
+	remote_conn, err := dialer.Dial("tcp", req_addr)
+	if err != nil {
+		var op timeout
+		if errors.As(err, &op) && op.Timeout() {
+			simple_respond(conn, req, http.StatusGatewayTimeout)
+		} else {
+			simple_respond(conn, req, http.StatusBadGateway)
+		}
+		close_err = err
+		return
+	}
+	defer remote_conn.Close()
+
+	log.Printf("[%s] -> [%s] connected", conn.RemoteAddr(), req_addr)
+	// send a 200 OK and start copying
+	_ = simple_respond(conn, req, http.StatusOK)
+	err_chan := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(remote_conn, conn)
+		err_chan <- err
+	}()
+	go func() {
+		_, err := io.Copy(conn, remote_conn)
+		err_chan <- err
+	}()
+	close_err = <-err_chan
+}
+
+func simple_respond(conn net.Conn, req *http.Request, statusCode int) error {
+	resp := &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Proto:      req.Proto,
+		ProtoMajor: req.ProtoMajor,
+		ProtoMinor: req.ProtoMinor,
+		Header:     http.Header{},
+	}
+	// Remove the "Content-Length: 0" header, some clients (e.g. ffmpeg) may not like it.
+	resp.ContentLength = -1
+	// Also, prevent the "Connection: close" header.
+	resp.Close = false
+	resp.Uncompressed = true
+	return resp.Write(conn)
+}
