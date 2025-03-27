@@ -1,0 +1,21 @@
+{
+	"$global": {
+		"DefaultAction": "deny",
+		"DefaultPort": [443],
+		"Match": {
+			"mirrors.tuna.tsinghua.edu.cn": "accept",
+			"mirrors6.tuna.tsinghua.edu.cn": "accept",
+
+			"incoming.telemetry.mozilla.org": "ignore"
+		}
+	},
+	"127.0.0.1": {
+		"DefaultAction": "deny",
+		"DefaultPort": [443],
+		"Match": {
+			"pkg.go.dev": "accept",
+			"go.dev": "accept"
+		}
+	}
+}
+

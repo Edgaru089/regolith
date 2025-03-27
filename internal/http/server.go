@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"edgaru089.ink/go/regolith/internal/perm"
 )
 
 const (
@@ -22,6 +24,24 @@ var (
 )
 
 type Server struct {
+	Perm *perm.Perm
+}
+
+// checkPerm invokes perm.Match.
+// If s.perm is nil, then every request is Accept-ed.
+//
+// It also logs if the action is Deny.
+func (s *Server) checkPerm(src, dest string) (act perm.Action) {
+	if s.Perm == nil {
+		return perm.ActionAccept
+	}
+
+	src_host, _, _ := net.SplitHostPort(src)
+	act = s.Perm.Match(src_host, dest)
+	if act == perm.ActionDeny {
+		log.Printf("denied: [%s] -> [%s]", src, dest)
+	}
+	return
 }
 
 func (s *Server) Serve(listener net.Listener) (err error) {
@@ -120,6 +140,12 @@ func (s *Server) handle_connect(conn net.Conn, req *http.Request) {
 	}
 	req_addr := net.JoinHostPort(req.URL.Hostname(), port)
 
+	// check permission
+	if s.checkPerm(conn.RemoteAddr().String(), req_addr) != perm.ActionAccept {
+		_ = simple_respond(conn, req, http.StatusBadGateway)
+		return
+	}
+
 	// prep for error log on close
 	var close_err error
 	defer func() {
@@ -164,8 +190,19 @@ func (s *Server) handle_request(conn net.Conn, req *http.Request) (should_keepal
 	remove_hop_headers(req.Header)
 	remove_extra_host_port(req)
 
-	if req.URL.Scheme == "" || req.URL.Host == "" {
+	if req.URL.Scheme != "http" || req.URL.Host == "" {
 		_ = simple_respond(conn, req, http.StatusBadRequest)
+		return false
+	}
+
+	// Check permission
+	req_hostname := req.URL.Hostname()
+	req_port := req.URL.Port()
+	if req_port == "" {
+		req_port = "80"
+	}
+	if s.checkPerm(conn.RemoteAddr().String(), net.JoinHostPort(req_hostname, req_port)) != perm.ActionAccept {
+		_ = simple_respond(conn, req, http.StatusBadGateway)
 		return false
 	}
 

@@ -1,0 +1,4 @@
+{
+	"ListenAddress": "127.0.0.1:3128",
+	"ListenType": "tcp4"
+}

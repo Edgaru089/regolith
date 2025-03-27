@@ -27,6 +27,20 @@ func MostSevere(a, b Action) Action {
 	return min(a, b)
 }
 
+func (a Action) String() (name string) {
+	switch a {
+	case ActionDeny:
+		name = "deny"
+	case ActionIgnore:
+		name = "ignore"
+	case ActionAccept:
+		name = "accept"
+	default:
+		name = "<" + strconv.Itoa(int(a)) + ">"
+	}
+	return
+}
+
 // Marshal/Unmarshal for Action
 func (a *Action) UnmarshalText(text []byte) error {
 	switch strings.ToLower(string(text)) {
@@ -42,25 +56,14 @@ func (a *Action) UnmarshalText(text []byte) error {
 	return nil
 }
 func (a Action) MarshalText() ([]byte, error) {
-	var name string
-	switch a {
-	case ActionDeny:
-		name = "deny"
-	case ActionIgnore:
-		name = "ignore"
-	case ActionAccept:
-		name = "accept"
-	default:
-		name = "<" + strconv.Itoa(int(a)) + ">"
-	}
-	return []byte(name), nil
+	return []byte(a.String()), nil
 }
 
 // Config is a list of address and actions, for each source address.
 // It can just be Marshal/Unmarshaled into/from json.
 type Config struct {
 	DefaultAction Action // What we should do when no action is matched.
-	DefaultPort   []uint // Port numbers to add to address without port numbers already in them. Don't put too many entries in here.
+	DefaultPort   []int  // Port numbers to add to address without port numbers already in them. Don't put too many entries in here.
 
 	// Object which holds addresses and optionally ports, mapping to actions.
 	//

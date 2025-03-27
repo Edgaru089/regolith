@@ -1,6 +1,7 @@
 package perm
 
 import (
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -50,9 +51,11 @@ func (p *Perm) Load(cs map[string]Config) {
 	load_per_source := func(c Config) (p_int int_perm) {
 		p_int.match = make(map[string]Action)
 		p_int.def = c.DefaultAction
+		log.Printf("default action %s", p_int.def)
 
 		// insert helper to use the most severe action existing
 		insert := func(addrport string, action Action) {
+			log.Printf("loading target %s, action %s", addrport, action)
 			existing_action, ok := p_int.match[addrport]
 			if ok {
 				p_int.match[addrport] = MostSevere(existing_action, action)
@@ -69,7 +72,7 @@ func (p *Perm) Load(cs map[string]Config) {
 			} else {
 				// so this is why def_port shouldn't be that big
 				// TODO change this to sth faster
-				for def_port := range c.DefaultPort {
+				for _, def_port := range c.DefaultPort {
 					insert(net.JoinHostPort(addr, strconv.Itoa(def_port)), act)
 				}
 			}
@@ -78,6 +81,7 @@ func (p *Perm) Load(cs map[string]Config) {
 	}
 
 	for src, c := range cs {
+		log.Printf("loading source %s", src)
 		if strings.EqualFold(src, "$global") {
 			p.global = load_per_source(c)
 		} else {
