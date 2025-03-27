@@ -28,6 +28,9 @@ func (s *Server) Serve(listener net.Listener) (err error) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			return err
 		}
 
@@ -104,10 +107,6 @@ func (c *cached_conn) Read(b []byte) (int, error) {
 	return c.Conn.Read(b)
 }
 
-type timeout interface {
-	Timeout() bool
-}
-
 // handle_connect returns until the connection is closed by
 // the client, or errors. You don't need to close it again.
 func (s *Server) handle_connect(conn net.Conn, req *http.Request) {
@@ -133,12 +132,7 @@ func (s *Server) handle_connect(conn net.Conn, req *http.Request) {
 	// dial
 	remote_conn, err := dialer.Dial("tcp", req_addr)
 	if err != nil {
-		var op timeout
-		if errors.As(err, &op) && op.Timeout() {
-			simple_respond(conn, req, http.StatusGatewayTimeout)
-		} else {
-			simple_respond(conn, req, http.StatusBadGateway)
-		}
+		simple_respond(conn, req, http.StatusBadGateway)
 		close_err = err
 		return
 	}
