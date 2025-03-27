@@ -56,7 +56,7 @@ func (a Action) MarshalText() ([]byte, error) {
 	return []byte(name), nil
 }
 
-// Config is a list of address and actions.
+// Config is a list of address and actions, for each source address.
 // It can just be Marshal/Unmarshaled into/from json.
 type Config struct {
 	DefaultAction Action // What we should do when no action is matched.
