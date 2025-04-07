@@ -6,11 +6,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"edgaru089.ink/go/regolith/internal/util"
 )
 
 type int_perm struct {
-	match map[string]Action
-	def   Action
+	match      map[string]Action
+	match_glob []globAction
+	def        Action
 }
 
 // Perm matches address:port strings to Actions
@@ -77,6 +80,29 @@ func (p *Perm) Load(cs map[string]Config) {
 				}
 			}
 		}
+		for _, glob := range c.MatchWildcard {
+			addr, port := splitHostPort(glob.Glob)
+			if port != "" {
+				log.Printf("loading glob target %s, action %s", glob.Glob, glob.Act)
+				p_int.match_glob = append(
+					p_int.match_glob,
+					globAction{
+						Glob: glob.Glob,
+						Act:  glob.Act,
+					})
+			} else {
+				// TODO change this to sth faster
+				for _, def_port := range c.DefaultPort {
+					log.Printf("loading glob target %s, action %s", net.JoinHostPort(addr, strconv.Itoa(def_port)), glob.Act)
+					p_int.match_glob = append(
+						p_int.match_glob,
+						globAction{
+							Glob: net.JoinHostPort(addr, strconv.Itoa(def_port)),
+							Act:  glob.Act,
+						})
+				}
+			}
+		}
 		return
 	}
 
@@ -108,9 +134,18 @@ func (p *Perm) Match(src, dest string) Action {
 	// find its source struct
 	p_int, ok_int := p.source[src]
 	// only check if dest is directly listed
-	if ok_int && p_int.match != nil {
-		if action, ok := p_int.match[dest]; ok {
-			return action
+	if ok_int {
+		// first check direct match
+		if p_int.match != nil {
+			if action, ok := p_int.match[dest]; ok {
+				return action
+			}
+		}
+		// then check glob match
+		for _, g := range p_int.match_glob {
+			if util.Match(g.Glob, dest) {
+				return g.Act
+			}
 		}
 	}
 
@@ -118,6 +153,12 @@ func (p *Perm) Match(src, dest string) Action {
 	if p.global.match != nil {
 		if action, ok := p.global.match[dest]; ok {
 			return action
+		}
+	}
+	// then check global glob match
+	for _, g := range p.global.match_glob {
+		if util.Match(g.Glob, dest) {
+			return g.Act
 		}
 	}
 

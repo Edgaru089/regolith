@@ -7,7 +7,10 @@
 			"mirrors6.tuna.tsinghua.edu.cn": "accept",
 
 			"incoming.telemetry.mozilla.org": "ignore"
-		}
+		},
+		"MatchWildcard": [
+			{"*.qq.com": "accept"}
+		]
 	},
 	"127.0.0.1": {
 		"DefaultAction": "deny",
@@ -15,7 +18,10 @@
 		"Match": {
 			"pkg.go.dev": "accept",
 			"go.dev": "accept"
-		}
+		},
+		"MatchWildcard": [
+			{"*.baidu.com": "accept"}
+		]
 	}
 }
 

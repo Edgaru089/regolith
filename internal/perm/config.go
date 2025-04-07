@@ -1,6 +1,7 @@
 package perm
 
 import (
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -59,6 +60,27 @@ func (a Action) MarshalText() ([]byte, error) {
 	return []byte(a.String()), nil
 }
 
+// globAction is a helper to pack globs better.
+type globAction struct {
+	Glob string
+	Act  Action
+}
+
+func (g *globAction) UnmarshalJSON(b []byte) error {
+	m := make(map[string]Action)
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	if len(m) != 1 {
+		return errors.New("Glob action object does not have & only have one key")
+	}
+	for k, v := range m {
+		g.Glob = k
+		g.Act = v
+	}
+	return nil
+}
+
 // Config is a list of address and actions, for each source address.
 // It can just be Marshal/Unmarshaled into/from json.
 type Config struct {
@@ -70,6 +92,12 @@ type Config struct {
 	// Port number is extracted by net/url.splitHostPort, copied below.
 	// Port number is optional, but must be numeric when present.
 	Match map[string]Action
+
+	// Object which holds wildcard matches.
+	// This is searched after Match. It appends the default port if not found.
+	//
+	// Unlike Match, this is a list that is searched top-to-bottom.
+	MatchWildcard []globAction
 }
 
 // validOptionalPort reports whether port is either an empty string
