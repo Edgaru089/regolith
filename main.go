@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"edgaru089.ink/go/regolith/internal/conf"
 	"edgaru089.ink/go/regolith/internal/http"
@@ -41,6 +43,16 @@ func main() {
 		err = json.Unmarshal(conf_buf, &conf)
 		if err != nil {
 			panic(err)
+		}
+	}
+
+	if len(conf.DNSResolver) != 0 {
+		dialer := &net.Dialer{
+			Timeout: time.Second * 10,
+		}
+		net.DefaultResolver.PreferGo = true
+		net.DefaultResolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return dialer.Dial(network, conf.DNSResolver)
 		}
 	}
 
